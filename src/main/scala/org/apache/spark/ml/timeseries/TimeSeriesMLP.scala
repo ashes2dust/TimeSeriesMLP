@@ -2,7 +2,7 @@ package org.apache.spark.ml.timeseries
 
 import java.text.SimpleDateFormat
 
-import org.apache.spark.ml.ann.{FeedForwardTopology, FeedForwardTrainer, TopologyModel}
+import org.apache.spark.ml.ann.{FeedForwardTrainer, HCFeedForwardTopology, SimpleLayerWithSquaredError, TopologyModel}
 import org.apache.spark.ml.linalg.{Vector, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
@@ -11,7 +11,6 @@ import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Dataset}
-
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
@@ -74,8 +73,8 @@ class TimeSeriesMLPModel(override val uid: String,
                          val layers: Array[Int],
                          val weights: Vector) extends Model[TimeSeriesMLPModel] {
 
-  private[ml] val mlpModel = FeedForwardTopology
-    .multiLayerPerceptron(layers)
+  private[ml] val mlpModel = HCFeedForwardTopology
+    .multiLayerRegressionPerceptron(layers)
     .model(weights)
 
   override def copy(extra: ParamMap): TimeSeriesMLPModel = {
@@ -187,8 +186,9 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
     rawData.take(10).foreach(println)
 
-    // Topology of MLP
-    val topology = FeedForwardTopology.multiLayerPerceptron(getLayers())
+    // 构造MLP，修改最后一层，不是Sigmoid，当然也可以重新实现multiLayerPerceptron函数
+    val topology = HCFeedForwardTopology.multiLayerRegressionPerceptron(getLayers())
+
     val trainer = new FeedForwardTrainer(topology, getLayers().head, getLayers().last)
     if (isDefined(initialWeights)) {
       trainer.setWeights($(initialWeights))
