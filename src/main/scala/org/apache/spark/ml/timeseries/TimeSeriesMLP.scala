@@ -45,6 +45,7 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
 
   // TODO: input layer (layers.head) is the window size,
   // and output layer (layers.tail) should be 1 in time series.
+  // Change to hiddenLayerSize.
   final val layers: IntArrayParam = new IntArrayParam(this, "layers",
     "Size of layers",
     (t: Array[Int]) => t.forall(ParamValidators.gt(0)) && t.length > 1)
@@ -55,6 +56,8 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
     ParamValidators.inArray[String](supportedSolvers))
 
   def getLayers(): Array[Int] = $(layers)
+
+  // TODO: activation
 
   setDefault(
     maxIter -> 100,
@@ -186,6 +189,12 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
     rawData.take(10).foreach(println)
 
+    // TODO: Transform data using sliding window.
+    // Double -> (Vector, Double)
+    val windowSize = getLayers().head
+    val data: RDD[(Vector, Vector)] = slidingWindowTransform(rawData, windowSize)
+    data.take(10).foreach(println)
+
     // 构造MLP，修改最后一层，不是Sigmoid，当然也可以重新实现multiLayerPerceptron函数
     val topology = HCFeedForwardTopology.multiLayerRegressionPerceptron(getLayers())
 
@@ -210,17 +219,10 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
         s"The solver $solver is not supported by MultilayerPerceptronClassifier.")
     }
 
-    // TODO: Transform data using sliding window.
-    // Double -> (Vector, Double)
-    val windowSize = getLayers().head
-    //    val rawData: RDD[(Double, Long)] = null // TODO
-    val data: RDD[(Vector, Vector)] = slidingWindowTransform(rawData, windowSize)
-    data.take(10).foreach(println)
-
     trainer.setStackSize($(blockSize))
+
     val mlpModel = trainer.train(data)
 
-    println(mlpModel.weights)
     new TimeSeriesMLPModel(uid, getLayers(), mlpModel.weights)
   }
 }

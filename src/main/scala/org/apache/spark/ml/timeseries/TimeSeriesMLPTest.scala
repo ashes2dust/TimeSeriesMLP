@@ -4,10 +4,10 @@ import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.SparkSession
 
 object TimeSeriesMLPTest {
-  var input = "data/simple.csv"
+  var input = "src/test/resources/simple_ts.csv"
   var windowSize = 3
   var pattern = "dd-MM-yy"
-  var layers = Array(3, 100, 100, 1)
+  var layers = Array(3, 10, 1)
 
   def main(args: Array[String]): Unit = {
     var idx = -1
