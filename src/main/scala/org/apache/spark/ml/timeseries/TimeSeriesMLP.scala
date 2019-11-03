@@ -216,7 +216,7 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
     val mlpModel = trainer.fit(df)
 
-    new TimeSeriesMLPModel(uid, layers, mlpModel.weights)
+    copyValues(new TimeSeriesMLPModel(uid, layers, mlpModel.weights))
   }
 }
 

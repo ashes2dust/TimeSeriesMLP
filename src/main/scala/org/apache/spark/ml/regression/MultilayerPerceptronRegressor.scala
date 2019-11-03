@@ -125,18 +125,19 @@ class MultilayerPerceptronRegressor(override val uid: String)
 
     val mlpModel = trainer.train(data)
 
-    new MultilayerPerceptronRegressorModel(this.uid, getLayers, mlpModel.weights)
+    copyValues(new MultilayerPerceptronRegressorModel(this.uid, getLayers, mlpModel.weights, $(activation)))
   }
 }
 
 private[regression] class MultilayerPerceptronRegressorModel(
     override val uid: String,
     val layerSizes: Array[Int],
-    val weights: Vector) extends RegressionModel[Vector, MultilayerPerceptronRegressorModel]
+    val weights: Vector,
+    val activaionType: String) extends RegressionModel[Vector, MultilayerPerceptronRegressorModel]
   with MultilayerPerceptronRegressorParams {
 
   private[ml] val mlpModel = HCFeedForwardTopology
-    .multiLayerRegressionPerceptron(layerSizes)
+    .multiLayerRegressionPerceptron(layerSizes, activaionType)
     .model(weights)
 
   override def copy(extra: ParamMap): MultilayerPerceptronRegressorModel = {
