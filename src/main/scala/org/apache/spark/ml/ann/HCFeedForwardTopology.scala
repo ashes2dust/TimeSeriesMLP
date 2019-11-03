@@ -3,16 +3,16 @@ package org.apache.spark.ml.ann
 
 private[ann] class ReluFunction extends ActivationFunction {
 
-  override def eval: (Double) => Double = x => math.max(0.0, x)
+  override def eval: Double => Double = x => math.max(0.0, x)
 
-  override def derivative: (Double) => Double = z => if (z == 0.0) 0 else z
+  override def derivative: Double => Double = z => if (z == 0.0) 0.0 else 1.0
 }
 
 private[ann] class IdentityFunction extends ActivationFunction {
 
   override def eval: Double => Double = x => x
 
-  override def derivative: Double => Double = z => z
+  override def derivative: Double => Double = _ => 1.0
 }
 
 private[ann] class TanhFunction extends ActivationFunction {
@@ -30,7 +30,8 @@ object HCFeedForwardTopology {
     * @return multilayer perceptron topology
     */
   def multiLayerRegressionPerceptron(
-                                      layerSizes: Array[Int]): FeedForwardTopology = {
+      layerSizes: Array[Int],
+      activation: String = "relu"): FeedForwardTopology = {
     val layers = new Array[Layer]((layerSizes.length - 1) * 2)
     for (i <- 0 until layerSizes.length - 1) {
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
@@ -38,7 +39,12 @@ object HCFeedForwardTopology {
         if (i == layerSizes.length - 2) {
           new SimpleLayerWithSquaredError()
         } else {
-          new FunctionalLayer(new SigmoidFunction())
+          activation match {
+            case "sigmoid" => new FunctionalLayer(new SigmoidFunction)
+            case "identity" => new FunctionalLayer(new IdentityFunction)
+            case "tanh" => new FunctionalLayer(new TanhFunction)
+            case _ => new FunctionalLayer(new ReluFunction)
+          }
         }
     }
     FeedForwardTopology(layers)

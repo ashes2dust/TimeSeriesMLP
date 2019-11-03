@@ -1,13 +1,12 @@
 package org.apache.spark.ml.timeseries
 
-import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.SparkSession
 
-object TimeSeriesMLPTest {
-  var input = "src/test/resources/simple_ts.csv"
-  var windowSize = 3
+object TimeSeriesStocksTest {
+  var input = "src/test/resources/sp500.csv"
+  var windowSize = 10
   var pattern = "dd-MM-yy"
-  var hiddenLayers = Array(10)
+  var hiddenLayers = Array(100, 100)
 
   def main(args: Array[String]): Unit = {
     var idx = -1
@@ -28,32 +27,16 @@ object TimeSeriesMLPTest {
       .read
       .option("header", "true")
       .csv(input)
+      .select("Close", "Date")
       .toDF("value", "timestamp")
-
-    df.show()
 
     val tsMLP = new TimeSeriesMLP()
       .setWindowSize(windowSize)
       .setHiddenLayers(hiddenLayers)
       .setSeed(1234L)
       .setMaxIter(100)
-      .setBlockSize(1)
+      .setBlockSize(32)
 
     val model = tsMLP.fit(df)
-
-    val testData = Array(
-      Vectors.dense(1.0, 1.0, 1.0),
-      Vectors.dense(1.0, 2.0, 3.0),
-      Vectors.dense(10.0, 11.0, 12.0)
-    )
-
-    for (feature <- testData) {
-      println(model.predict(feature))
-    }
-//    val predict = model.predict(Vectors.dense(1.0, 1.0, 1.0))
-//    println(predict)
-
-    spark.stop()
   }
-
 }

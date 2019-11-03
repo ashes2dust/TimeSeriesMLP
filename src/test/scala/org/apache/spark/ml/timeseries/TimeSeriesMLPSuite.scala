@@ -1,29 +1,12 @@
 package org.apache.spark.ml.timeseries
 
 import org.apache.spark.ml.linalg.Vectors
-import org.apache.spark.sql.SparkSession
-import org.scalatest.{BeforeAndAfterAll, FunSuite}
+import org.apache.spark.ml.util.MLTest
 
-class MLPSuite extends FunSuite with BeforeAndAfterAll {
-  var spark: SparkSession = _
+class TimeSeriesMLPSuite extends MLTest {
 
-  override def beforeAll(): Unit = {
-    spark = SparkSession.builder()
-      .appName("TimeseriesWithMLPTest")
-      .master("local[*]")
-      .getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
-  }
-
-
-  override def afterAll(): Unit = {
-    if (spark != null) {
-      spark.stop()
-    }
-  }
-
-  test("Regression") {
-    val filePath = this.getClass.getResource("/simple_ts.csv").toString
+  test("TimeSeriesMLP") {
+    val filePath = "src/test/resources/simple_ts.csv"
 
     val df = spark
       .read
@@ -31,15 +14,17 @@ class MLPSuite extends FunSuite with BeforeAndAfterAll {
       .csv(filePath)
       .toDF("value", "timestamp")
 
-    val layers = Array(3, 10, 1)
+    val hiddenLayers = Array(10)
+    val windowSize = 3
 
     val tsMLP = new TimeSeriesMLP()
-      .setLayers(layers)
+      .setHiddenLayers(hiddenLayers)
+      .setWindowSize(windowSize)
       .setSeed(1234L)
       .setStepSize(0.001) // stepSize如果设置不当，应该是出现震荡的情况，无法收敛
       .setMaxIter(10000)
       .setBlockSize(1)
-      .setSolver("gd")
+      .setSolver("l-bfgs")
 
     val model = tsMLP.fit(df)
 

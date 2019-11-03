@@ -9,12 +9,10 @@ class MLTest extends FunSuite with BeforeAndAfterAll{
 
   override def beforeAll(): Unit = {
     spark = SparkSession.builder()
-      .appName("TimeseriesWithMLPTest")
       .master("local[*]")
       .getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
   }
-
 
   override def afterAll(): Unit = {
     if (spark != null) {

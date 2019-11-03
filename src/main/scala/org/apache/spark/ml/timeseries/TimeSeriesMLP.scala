@@ -2,21 +2,22 @@ package org.apache.spark.ml.timeseries
 
 import java.text.SimpleDateFormat
 
-import org.apache.spark.ml.ann.{FeedForwardTrainer, HCFeedForwardTopology, SimpleLayerWithSquaredError, TopologyModel}
+import org.apache.spark.ml.ann.HCFeedForwardTopology
 import org.apache.spark.ml.linalg.{Vector, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
+import org.apache.spark.ml.regression.MultilayerPerceptronRegressor
 import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable}
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Dataset}
+
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
 private[timeseries] trait TimeSeriesMLPParams extends Params
-  with HasTol with HasInputCol with HasOutputCol with HasSeed
-  with HasMaxIter with HasStepSize with HasSolver {
+  with HasTol with HasSeed with HasMaxIter with HasStepSize with HasSolver {
 
   import TimeSeriesMLP._
 
@@ -43,21 +44,27 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
 
   def getBlockSize: Int = $(blockSize)
 
-  // TODO: input layer (layers.head) is the window size,
-  // and output layer (layers.tail) should be 1 in time series.
-  // Change to hiddenLayerSize.
-  final val layers: IntArrayParam = new IntArrayParam(this, "layers",
+  final val windowSize: Param[Int] = new Param[Int](this, "windowSize",
+  "The window size", ParamValidators.gt(0))
+
+  def getWindowSize: Int = $(windowSize)
+
+  final val hiddenLayers: IntArrayParam = new IntArrayParam(this, "layers",
     "Size of layers",
-    (t: Array[Int]) => t.forall(ParamValidators.gt(0)) && t.length > 1)
+    (t: Array[Int]) => t.forall(ParamValidators.gt(0)) && t.length >= 1)
+
+  def getHiddenLayers: Array[Int] = $(hiddenLayers)
+
+  final val activation: Param[String] = new Param[String](this, "activation",
+    "The activation function of hidden layers",
+    ParamValidators.inArray(Array("relu", "sigmoid", "tanh", "identity")))
+
+  def getActivation: String = $(activation)
 
   final override val solver: Param[String] = new Param[String](this, "solver",
     "The solver algorithm for optimization. Supported options: " +
       s"${supportedSolvers.mkString(", ")}. (Default l-bfgs)",
     ParamValidators.inArray[String](supportedSolvers))
-
-  def getLayers(): Array[Int] = $(layers)
-
-  // TODO: activation
 
   setDefault(
     maxIter -> 100,
@@ -67,14 +74,16 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
     stepSize -> 0.03,
     valueCol -> "value",
     tsCol -> "timestamp",
-    pattern -> "dd-MM-yy"
+    pattern -> "dd-MM-yy",
+    windowSize -> 1
   )
 
 }
 
-class TimeSeriesMLPModel(override val uid: String,
-                         val layers: Array[Int],
-                         val weights: Vector) extends Model[TimeSeriesMLPModel] {
+class TimeSeriesMLPModel(
+    override val uid: String,
+    val layers: Array[Int],
+    val weights: Vector) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
 
   private[ml] val mlpModel = HCFeedForwardTopology
     .multiLayerRegressionPerceptron(layers)
@@ -122,13 +131,13 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
   def setTsCol(value: String): this.type = set(tsCol, value)
 
-  def setLayers(value: Array[Int]): this.type = set(layers, value)
+  def setHiddenLayers(value: Array[Int]): this.type = set(hiddenLayers, value)
+
+  def setWindowSize(value: Int): this.type = set(windowSize, value)
 
   def setPattern(value: String): this.type = set(pattern, value)
 
-  //  def setInputCol(value: String): this.type = set(inputCol, value)
-  //
-  //  def setOutputCol(value: String): this.type = set(outputCol, value)
+  def setActivation(value: String): this.type = set(activation, value)
 
   def setSeed(value: Long): this.type = set(seed, value)
 
@@ -149,7 +158,7 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
     schema
   }
 
-  def slidingWindowTransform(data: RDD[(Double, Long)], windowSize: Int): RDD[(Vector, Vector)] = {
+  def slidingWindowTransform(data: RDD[(Double, Long)], windowSize: Int): RDD[(Vector, Double)] = {
     val windowData = data.flatMap { case (v, id) =>
       var i = id
       val arr = new ListBuffer[(Long, mutable.Iterable[(Long, Double)])]()
@@ -162,7 +171,7 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
     }.reduceByKey(_ ++ _)
       .map { x =>
         val arr = x._2.toArray.sorted.map(_._2)
-        (x._1, (Vectors.dense(arr.take(arr.length - 1)), Vectors.dense(arr.last)))
+        (x._1, (Vectors.dense(arr.take(arr.length - 1)), arr.last))
       } // TODO: Should I sort rdd by timestamp ? I can optimize this.
       .map(_._2).filter(_._1.size == windowSize)
     windowData
@@ -172,7 +181,6 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
     // Preprocessing
     def toTimeStamp(str: String): Long = {
       val format = new SimpleDateFormat($(pattern))
-      //      new Timestamp(format.parse(str).getTime)
       format.parse(str).getTime
     }
 
@@ -181,49 +189,34 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
     val toTime = spark.udf.register("toTime", (str: String) => toTimeStamp(str))
     val rawData = dataset
       .withColumn("timestamp", toTime(dataset(getTsCol)))
-      //        .withColumn("value", dataset(getInputCol).cast(DoubleType))
       .select("value", "timestamp")
       .rdd.map(row => (row.getString(0).toDouble, row.getLong(1)))
       .sortBy(_._2).zipWithIndex().map(x => (x._1._1, x._2))
 
-
-    rawData.take(10).foreach(println)
-
-    // TODO: Transform data using sliding window.
     // Double -> (Vector, Double)
-    val windowSize = getLayers().head
-    val data: RDD[(Vector, Vector)] = slidingWindowTransform(rawData, windowSize)
-    data.take(10).foreach(println)
+    val data = slidingWindowTransform(rawData, $(windowSize))
 
     // 构造MLP，修改最后一层，不是Sigmoid，当然也可以重新实现multiLayerPerceptron函数
-    val topology = HCFeedForwardTopology.multiLayerRegressionPerceptron(getLayers())
-
-    val trainer = new FeedForwardTrainer(topology, getLayers().head, getLayers().last)
-    if (isDefined(initialWeights)) {
-      trainer.setWeights($(initialWeights))
-    } else {
-      trainer.setSeed($(seed))
-    }
-
-    if ($(solver) == TimeSeriesMLP.LBFGS) {
-      trainer.LBFGSOptimizer
-        .setConvergenceTol($(tol))
-        .setNumIterations($(maxIter))
-    } else if ($(solver) == TimeSeriesMLP.GD) {
-      trainer.SGDOptimizer
-        .setNumIterations($(maxIter))
-        .setConvergenceTol($(tol))
+    val layers = Array($(windowSize)) ++ $(hiddenLayers) ++ Array(1)
+    val trainer = new MultilayerPerceptronRegressor()
+        .setLayers(layers)
+        .setBlockSize($(blockSize))
+        .setMaxIter($(maxIter))
+        .setSeed($(seed))
+        .setSolver($(solver))
         .setStepSize($(stepSize))
-    } else {
-      throw new IllegalArgumentException(
-        s"The solver $solver is not supported by MultilayerPerceptronClassifier.")
+
+    if (isDefined(initialWeights)) {
+      trainer.setInitialWeights($(initialWeights))
     }
 
-    trainer.setStackSize($(blockSize))
+    import spark.implicits._
 
-    val mlpModel = trainer.train(data)
+    val df = data.toDF("features", "label")
 
-    new TimeSeriesMLPModel(uid, getLayers(), mlpModel.weights)
+    val mlpModel = trainer.fit(df)
+
+    new TimeSeriesMLPModel(uid, layers, mlpModel.weights)
   }
 }
 

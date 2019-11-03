@@ -7,11 +7,11 @@ import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{Dataset, Row}
+import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
 private[regression] trait MultilayerPerceptronRegressorParams extends Params
   with HasTol with HasSeed with HasMaxIter with HasStepSize with HasSolver
-  with HasInputCol with HasOutputCol {
+  with HasPredictionCol {
 
   import MultilayerPerceptronRegressor._
 
@@ -31,6 +31,12 @@ private[regression] trait MultilayerPerceptronRegressorParams extends Params
 
   def getLayers: Array[Int] = $(layers)
 
+  final val activation: Param[String] = new Param[String](this, "activation",
+  "The activation function of hidden layers",
+    ParamValidators.inArray(Array("relu", "sigmoid", "tanh", "identity")))
+
+  def getActivation: String = $(activation)
+
   final override val solver: Param[String] = new Param[String](this, "solver",
     "The solver algorithm for optimization. Supported options: " +
       s"${supportedSolvers.mkString(", ")}. (Default l-bfgs)",
@@ -41,7 +47,8 @@ private[regression] trait MultilayerPerceptronRegressorParams extends Params
     tol -> 1e-6,
     blockSize -> 128,
     solver -> LBFGS,
-    stepSize -> 0.03
+    stepSize -> 0.03,
+    activation -> "relu"
   )
 
 }
@@ -77,6 +84,8 @@ class MultilayerPerceptronRegressor(override val uid: String)
 
   def setLayers(value: Array[Int]): this.type = set(layers, value)
 
+  def setActivation(value: String): this.type = set(activation, value)
+
   override def copy(extra: ParamMap): MultilayerPerceptronRegressor = defaultCopy(extra)
 
   def transformDataset(dataset: Dataset[_]): RDD[(Vector, Vector)] = {
@@ -89,7 +98,7 @@ class MultilayerPerceptronRegressor(override val uid: String)
 
     val data = transformDataset(dataset)
 
-    val topology = HCFeedForwardTopology.multiLayerRegressionPerceptron(getLayers)
+    val topology = HCFeedForwardTopology.multiLayerRegressionPerceptron(getLayers, $(activation))
 
     val trainer = new FeedForwardTrainer(topology, getLayers.head, getLayers.last)
     if (isDefined(initialWeights)) {
@@ -130,10 +139,6 @@ private[regression] class MultilayerPerceptronRegressorModel(
     .multiLayerRegressionPerceptron(layerSizes)
     .model(weights)
 
-  def setInputCol(value: String): this.type = set(inputCol, value)
-
-  def setOutputCol(value: String): this.type = set(outputCol, value)
-
   override def copy(extra: ParamMap): MultilayerPerceptronRegressorModel = {
     defaultCopy(extra)
   }
@@ -142,5 +147,14 @@ private[regression] class MultilayerPerceptronRegressorModel(
     mlpModel.predict(features)(0)
   }
 
-  // TODO: Predict dataset
+  def predict(dataset: Dataset[_]): DataFrame = {
+    // TODO: Validate dataset
+    val df = dataset.toDF()
+
+    val spark = dataset.sparkSession
+
+    val predictUDF = spark.udf.register("prediction", (features: Vector) => predict(features))
+
+    df.withColumn($(predictionCol), predictUDF(df($(featuresCol))))
+  }
 }
