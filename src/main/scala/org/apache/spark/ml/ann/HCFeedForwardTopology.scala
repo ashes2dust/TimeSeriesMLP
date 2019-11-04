@@ -22,7 +22,7 @@ private[ann] class TanhFunction extends ActivationFunction {
   override def derivative: Double => Double = z => 1 - z * z
 }
 
-object HCFeedForwardTopology {
+private[ml] object HCFeedForwardTopology {
   /**
     * Creates a multi-layer regression perceptron
     *

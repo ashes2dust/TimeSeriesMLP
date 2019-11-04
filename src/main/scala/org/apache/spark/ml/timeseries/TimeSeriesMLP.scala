@@ -11,13 +11,13 @@ import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, I
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.{DataFrame, Dataset}
+import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
-import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
 private[timeseries] trait TimeSeriesMLPParams extends Params
-  with HasTol with HasSeed with HasMaxIter with HasStepSize with HasSolver {
+  with HasTol with HasSeed with HasMaxIter with HasStepSize
+  with HasSolver {
 
   import TimeSeriesMLP._
 
@@ -75,42 +75,13 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
     valueCol -> "value",
     tsCol -> "timestamp",
     pattern -> "dd-MM-yy",
-    windowSize -> 1
+    windowSize -> 1,
+    activation -> "relu"
   )
 
 }
 
-class TimeSeriesMLPModel(
-    override val uid: String,
-    val layers: Array[Int],
-    val weights: Vector) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
-
-  private[ml] val mlpModel = HCFeedForwardTopology
-    .multiLayerRegressionPerceptron(layers)
-    .model(weights)
-
-  override def copy(extra: ParamMap): TimeSeriesMLPModel = {
-    val copied = new TimeSeriesMLPModel(uid, layers, weights)
-    copied.copyValues(copied, extra)
-  }
-
-  override def transform(dataset: Dataset[_]): DataFrame = {
-    // TODO
-    dataset.toDF()
-  }
-
-  override def transformSchema(schema: StructType): StructType = {
-    // TODO
-    schema
-  }
-
-  def predict(features: Vector): Double = {
-    val v = mlpModel.predict(features)
-    v(0)
-  }
-}
-
-private[timeseries] object TimeSeriesMLP extends DefaultParamsReadable[TimeSeriesMLP] {
+object TimeSeriesMLP extends DefaultParamsReadable[TimeSeriesMLP] {
   private[timeseries] val LBFGS = "l-bfgs"
 
   private[timeseries] val GD = "gd"
@@ -118,6 +89,57 @@ private[timeseries] object TimeSeriesMLP extends DefaultParamsReadable[TimeSerie
   private[timeseries] val supportedSolvers = Array(LBFGS, GD)
 
   override def load(path: String): TimeSeriesMLP = super.load(path)
+
+  def slidingWindowTransform(data: RDD[(Double, Long)], windowSize: Int): RDD[(Vector, Double)] = {
+    val windowData = data.flatMap { case (v, id) =>
+      var i = id
+      val arr = new ListBuffer[(Long, (Long, Double))]()
+      while (i >= id - windowSize) {
+        val tp = Tuple2(id, v)
+        arr += Tuple2(i, tp)
+        i -= 1
+      }
+      arr
+    }.groupByKey()
+      .map { x =>
+        val arr = x._2.toArray.sorted.map(_._2)
+        (x._1, (Vectors.dense(arr.take(arr.length - 1)), arr.last))
+      }.sortBy(_._1)
+      .map(_._2).filter(_._1.size == windowSize)
+    windowData
+  }
+
+  // DF('value', 'timestamp') -> DF('features', 'label')
+  def slidingWindowTransform(
+      dataset: Dataset[_],
+      windowSize: Int,
+      sort: Boolean = false,
+      valueCol: String = "value",
+      tsCol: String = "timestamp",
+      pattern: String = "dd-MM-yy",
+      featuresCol: String = "features",
+      labelCol: String = "label"): DataFrame = {
+
+    val data = dataset.select(valueCol, tsCol)
+      .rdd.map { case Row(value: String, ts: String) =>
+      val format = new SimpleDateFormat(pattern)
+      (value.toDouble, format.parse(ts).getTime)
+    }
+
+    val sortedData = {
+      if (sort)
+        data.sortBy(_._2).zipWithIndex().map(x => (x._1._1, x._2))
+      else
+        data.zipWithIndex().map(x => (x._1._1, x._2))
+    }
+
+    val spark = dataset.sparkSession
+
+    import spark.implicits._
+
+    slidingWindowTransform(sortedData, windowSize).toDF(featuresCol, labelCol)
+  }
+
 }
 
 class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPModel]
@@ -158,65 +180,58 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
     schema
   }
 
-  def slidingWindowTransform(data: RDD[(Double, Long)], windowSize: Int): RDD[(Vector, Double)] = {
-    val windowData = data.flatMap { case (v, id) =>
-      var i = id
-      val arr = new ListBuffer[(Long, mutable.Iterable[(Long, Double)])]()
-      while (i >= id - windowSize) {
-        val tp = mutable.Iterable(Tuple2(id, v))
-        arr += Tuple2(i, tp)
-        i -= 1
-      }
-      arr
-    }.reduceByKey(_ ++ _)
-      .map { x =>
-        val arr = x._2.toArray.sorted.map(_._2)
-        (x._1, (Vectors.dense(arr.take(arr.length - 1)), arr.last))
-      } // TODO: Should I sort rdd by timestamp ? I can optimize this.
-      .map(_._2).filter(_._1.size == windowSize)
-    windowData
-  }
-
   override def fit(dataset: Dataset[_]): TimeSeriesMLPModel = {
-    // Preprocessing
-    def toTimeStamp(str: String): Long = {
-      val format = new SimpleDateFormat($(pattern))
-      format.parse(str).getTime
-    }
 
-    // cast string to timestamp
-    val spark = dataset.sparkSession
-    val toTime = spark.udf.register("toTime", (str: String) => toTimeStamp(str))
-    val rawData = dataset
-      .withColumn("timestamp", toTime(dataset(getTsCol)))
-      .select("value", "timestamp")
-      .rdd.map(row => (row.getString(0).toDouble, row.getLong(1)))
-      .sortBy(_._2).zipWithIndex().map(x => (x._1._1, x._2))
+    val df = TimeSeriesMLP.slidingWindowTransform(dataset, $(windowSize), sort = true,
+      $(valueCol), $(tsCol), $(pattern))
 
-    // Double -> (Vector, Double)
-    val data = slidingWindowTransform(rawData, $(windowSize))
-
-    // 构造MLP，修改最后一层，不是Sigmoid，当然也可以重新实现multiLayerPerceptron函数
     val layers = Array($(windowSize)) ++ $(hiddenLayers) ++ Array(1)
     val trainer = new MultilayerPerceptronRegressor()
-        .setLayers(layers)
-        .setBlockSize($(blockSize))
-        .setMaxIter($(maxIter))
-        .setSeed($(seed))
-        .setSolver($(solver))
-        .setStepSize($(stepSize))
+      .setLayers(layers)
+      .setActivation($(activation))
+      .setBlockSize($(blockSize))
+      .setMaxIter($(maxIter))
+      .setSeed($(seed))
+      .setSolver($(solver))
+      .setStepSize($(stepSize))
 
     if (isDefined(initialWeights)) {
       trainer.setInitialWeights($(initialWeights))
     }
 
-    import spark.implicits._
-
-    val df = data.toDF("features", "label")
-
     val mlpModel = trainer.fit(df)
 
-    copyValues(new TimeSeriesMLPModel(uid, layers, mlpModel.weights))
+    copyValues(new TimeSeriesMLPModel(uid, layers, mlpModel.weights, $(activation)))
   }
 }
 
+class TimeSeriesMLPModel(
+                          override val uid: String,
+                          val layers: Array[Int],
+                          val weights: Vector,
+                          val activationType: String) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
+
+  private[ml] val mlpModel = HCFeedForwardTopology
+    .multiLayerRegressionPerceptron(layers, activationType)
+    .model(weights)
+
+  override def copy(extra: ParamMap): TimeSeriesMLPModel = {
+    val copied = new TimeSeriesMLPModel(uid, layers, weights, activationType)
+    copied.copyValues(copied, extra)
+  }
+
+  override def transform(dataset: Dataset[_]): DataFrame = {
+    // TODO
+    dataset.toDF()
+  }
+
+  override def transformSchema(schema: StructType): StructType = {
+    // TODO
+    schema
+  }
+
+  def predict(features: Vector): Double = {
+    val v = mlpModel.predict(features)
+    v(0)
+  }
+}
