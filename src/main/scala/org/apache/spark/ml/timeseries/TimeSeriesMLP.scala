@@ -1,19 +1,20 @@
 package org.apache.spark.ml.timeseries
 
 import java.text.SimpleDateFormat
+import java.util.{Calendar, Date}
 
 import org.apache.spark.ml.ann.HCFeedForwardTopology
-import org.apache.spark.ml.linalg.{Vector, Vectors}
+import org.apache.spark.ml.linalg.{DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.regression.MultilayerPerceptronRegressor
 import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable}
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{DoubleType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
-import scala.collection.mutable.ListBuffer
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
 private[timeseries] trait TimeSeriesMLPParams extends Params
   with HasTol with HasSeed with HasMaxIter with HasStepSize
@@ -66,6 +67,11 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
       s"${supportedSolvers.mkString(", ")}. (Default l-bfgs)",
     ParamValidators.inArray[String](supportedSolvers))
 
+  final val predictDays: IntParam = new IntParam(this, "predictDays",
+  "The number of days to forecast", ParamValidators.gt(0))
+
+  def getPredictDays: Int = $(predictDays)
+
   setDefault(
     maxIter -> 100,
     tol -> 1e-6,
@@ -76,7 +82,8 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
     tsCol -> "timestamp",
     pattern -> "dd-MM-yy",
     windowSize -> 1,
-    activation -> "relu"
+    activation -> "relu",
+    predictDays -> 1
   )
 
 }
@@ -182,7 +189,7 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
   override def fit(dataset: Dataset[_]): TimeSeriesMLPModel = {
 
-    val df = TimeSeriesMLP.slidingWindowTransform(dataset, $(windowSize), sort = true,
+    val df = TimeSeriesMLP.slidingWindowTransform(dataset, $(windowSize), sort=true,
       $(valueCol), $(tsCol), $(pattern))
 
     val layers = Array($(windowSize)) ++ $(hiddenLayers) ++ Array(1)
@@ -215,6 +222,14 @@ class TimeSeriesMLPModel(
     .multiLayerRegressionPerceptron(layers, activationType)
     .model(weights)
 
+  def setValueCol(value: String): this.type = set(valueCol, value)
+
+  def setTsCol(value: String): this.type = set(tsCol, value)
+
+  def setPattern(value: String): this.type = set(pattern, value)
+
+  def setPredictDays(value: Int): this.type = set(predictDays, value)
+
   override def copy(extra: ParamMap): TimeSeriesMLPModel = {
     val copied = new TimeSeriesMLPModel(uid, layers, weights, activationType)
     copied.copyValues(copied, extra)
@@ -233,5 +248,54 @@ class TimeSeriesMLPModel(
   def predict(features: Vector): Double = {
     val v = mlpModel.predict(features)
     v(0)
+  }
+
+  case class TSData(value: Double, timestamp: String)
+
+  // Forecast the future days according to predictDays
+  def predict(dataset: Dataset[_]): DataFrame = {
+    val format = new SimpleDateFormat($(pattern))
+
+    val toTime = dataset.sparkSession.udf.register("toTime", (ts: String) => format.parse(ts).getTime)
+
+    val rawDF = dataset.toDF($(valueCol), $(tsCol))
+    val df = rawDF.withColumn($(tsCol), toTime(rawDF($(tsCol))))
+      .withColumn($(valueCol), rawDF($(valueCol)).cast(DoubleType)).sort($(tsCol)).cache()
+
+    val histories = df.rdd.map { case Row(value: Double, ts: Long) =>
+      (value, ts)
+    }.collect()
+
+    if (histories.length < $(windowSize)) {
+      throw new IllegalArgumentException(
+        "The dataset size should not less than window size."
+      )
+    }
+
+    // Forecast iteratively
+    var feature = histories.map(_._1).drop(histories.length - $(windowSize))
+    val predictions = ArrayBuffer[Double]()
+
+    for (i <- 0 until $(predictDays)) {
+      val pred = predict(new DenseVector(feature))
+      predictions += pred
+      feature = feature.drop(1) :+ pred
+    }
+
+    // Transform predictions to DF["value", "ts"]
+    val startDate = new Date(histories.last._2)
+    val cal = Calendar.getInstance()
+
+    cal.setTime(startDate)
+
+    val futures = ArrayBuffer[TSData]()
+    for (pred <- predictions) {
+      cal.roll(Calendar.DATE, true)
+      futures += TSData(pred, format.format(cal.getTime))
+    }
+
+    df.unpersist()
+
+    dataset.sparkSession.createDataFrame(futures)
   }
 }
