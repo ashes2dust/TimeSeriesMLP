@@ -39,7 +39,6 @@ class TimeSeriesMLPSuite extends MLTest {
       Vectors.dense(1.0, 2.0, 3.0),
       Vectors.dense(10.0, 11.0, 12.0)
     )
-    println(s"model size: ${model.layers.length}")
 
     for (feature <- testData) {
       println(model.predict(feature))
@@ -77,7 +76,6 @@ class TimeSeriesMLPSuite extends MLTest {
       Vectors.dense(1.0, 2.0, 3.0),
       Vectors.dense(10.0, 11.0, 12.0)
     )
-    println(s"model size: ${model.layers.length}")
 
     for (feature <- testData) {
       println(model.predict(feature))

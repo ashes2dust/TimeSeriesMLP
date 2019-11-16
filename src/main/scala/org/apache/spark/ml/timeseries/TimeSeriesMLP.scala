@@ -3,11 +3,10 @@ package org.apache.spark.ml.timeseries
 import java.text.SimpleDateFormat
 import java.util.{Calendar, Date}
 
-import org.apache.spark.ml.ann.RegressionFeedForwardTopology
 import org.apache.spark.ml.linalg.{DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
-import org.apache.spark.ml.regression.MultilayerPerceptronRegressor
+import org.apache.spark.ml.regression.{MultilayerPerceptronRegressor, MultilayerPerceptronRegressorModel}
 import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable}
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.rdd.RDD
@@ -241,21 +240,15 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
     val mlpModel = trainer.fit(df)
 
-    copyValues(new TimeSeriesMLPModel(uid, layers, mlpModel.weights, $(activation)))
+    copyValues(new TimeSeriesMLPModel(uid, mlpModel))
   }
 }
 
 class TimeSeriesMLPModel(
       override val uid: String,
-      val layers: Array[Int],
-      val weights: Vector,
-      val activationType: String) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
+      val parentModel: MultilayerPerceptronRegressorModel) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
 
   import TimeSeriesMLP._
-
-  private[ml] val mlpModel = RegressionFeedForwardTopology
-    .multiLayerRegressionPerceptron(layers, activationType)
-    .model(weights)
 
   def setValueCol(value: String): this.type = set(valueCol, value)
 
@@ -266,7 +259,7 @@ class TimeSeriesMLPModel(
   def setFutures(value: Int): this.type = set(futures, value)
 
   override def copy(extra: ParamMap): TimeSeriesMLPModel = {
-    val copied = new TimeSeriesMLPModel(uid, layers, weights, activationType)
+    val copied = new TimeSeriesMLPModel(uid, parentModel)
     copied.copyValues(copied, extra)
   }
 
@@ -321,8 +314,7 @@ class TimeSeriesMLPModel(
   }
 
   def predict(features: Vector): Double = {
-    val v = mlpModel.predict(features)
-    v(0)
+    parentModel.predict(features)
   }
 
   private[TimeSeriesMLPModel] case class TSData(value: Double, timestamp: String)

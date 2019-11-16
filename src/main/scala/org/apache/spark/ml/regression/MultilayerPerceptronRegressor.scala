@@ -130,7 +130,7 @@ class MultilayerPerceptronRegressor(override val uid: String)
   }
 }
 
-private[regression] class MultilayerPerceptronRegressorModel(
+private[ml] class MultilayerPerceptronRegressorModel(
     override val uid: String,
     val layerSizes: Array[Int],
     val weights: Vector,
@@ -149,8 +149,7 @@ private[regression] class MultilayerPerceptronRegressorModel(
     mlpModel.predict(features)(0)
   }
 
-  def predict(dataset: Dataset[_]): DataFrame = {
-    // TODO: Validate dataset
+  override def transform(dataset: Dataset[_]): DataFrame = {
     val df = dataset.toDF()
 
     val spark = dataset.sparkSession

@@ -7,7 +7,7 @@ import org.apache.spark.sql.DataFrame
 
 class MLPRegressorSuite extends MLTest {
 
-  case class TestData(features: Vector, label: Double)
+  private case class TestData(features: Vector, label: Double)
 
   var trainDF: DataFrame = _
   var testDF: DataFrame = _
@@ -41,7 +41,7 @@ class MLPRegressorSuite extends MLTest {
 
     println(model.predict(testFeature))
 
-    model.predict(testDF).show(20)
+    model.transform(testDF).show(20)
   }
 
   test("sigmoid activation") {
@@ -53,7 +53,7 @@ class MLPRegressorSuite extends MLTest {
 
     val model = mlpRegressor.fit(trainDF)
 
-    model.predict(testDF).show(20)
+    model.transform(testDF).show(20)
   }
 
   test("identity activation") {
@@ -65,7 +65,7 @@ class MLPRegressorSuite extends MLTest {
 
     val model = mlpRegressor.fit(trainDF)
 
-    model.predict(testDF).show(20)
+    model.transform(testDF).show(20)
   }
 
   test("tanh activation") {
@@ -77,7 +77,7 @@ class MLPRegressorSuite extends MLTest {
 
     val model = mlpRegressor.fit(trainDF)
 
-    model.predict(testDF).show(20)
+    model.transform(testDF).show(20)
   }
 
   test("LRRegression") {

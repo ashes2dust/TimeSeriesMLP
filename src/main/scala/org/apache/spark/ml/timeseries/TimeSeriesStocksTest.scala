@@ -1,15 +1,16 @@
 package org.apache.spark.ml.timeseries
 
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.{Column, Row, SparkSession}
 import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.sql.types.DoubleType
 
 object TimeSeriesStocksTest {
-  var input = "data/sp500_train.csv"
-  var testInput = "data/sp500_test.csv"
+  var input = "data/scaled_sp500_train.csv"
+  var testInput = "data/scaled_sp500_test.csv"
   var windowSize = 50
   var pattern = "dd-MM-yy"
   var hiddenLayers = Array(100, 100)
-  var activation = "relu"
+  var activation = "tanh"
 
   def main(args: Array[String]): Unit = {
     var idx = -1
@@ -35,10 +36,12 @@ object TimeSeriesStocksTest {
       .csv(input)
       .select("Close", "Date")
       .toDF("value", "timestamp")
+      .withColumn("value", new Column("value").cast(DoubleType))
 
     val testDF = spark.read.option("header", "true")
       .csv(testInput).select("Close", "Date")
       .toDF("value", "timestamp")
+      .withColumn("value", new Column("value").cast(DoubleType))
 
     // Train
     val tsMLP = new TimeSeriesMLP()
@@ -48,12 +51,12 @@ object TimeSeriesStocksTest {
       .setSeed(1234L)
       .setMaxIter(1000)
       .setBlockSize(32)
+      .setStepSize(0.001)
 
     val model = tsMLP.fit(df)
 
     // Test
     val testFeatures = TimeSeriesMLP.slidingWindowTransform(testDF, windowSize, sort = true)
-    testFeatures.show()
 
     val predictUDF = spark.udf.register("prediction", (feature: Vector) => model.predict(feature))
 
@@ -64,9 +67,7 @@ object TimeSeriesStocksTest {
       math.pow(math.abs(label - prediction), 2)
     }.sum() / predictions.count()
 
-    predictions.select("label", "prediction").write.option("header", "true").csv("src/test/resources/sigmoid.csv")
-
-    predictions.show()
+    predictions.select("label", "prediction").write.option("header", "true").csv(s"data/$activation")
 
     println(s"activation = $activation, loss = $loss")
   }
