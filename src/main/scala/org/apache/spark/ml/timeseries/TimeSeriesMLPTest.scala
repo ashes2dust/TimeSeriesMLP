@@ -4,7 +4,7 @@ import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.SparkSession
 
 object TimeSeriesMLPTest {
-  var input = "src/test/resources/simple_ts.csv"
+  var input = "data/simple_ts.csv"
   var windowSize = 3
   var pattern = "dd-MM-yy"
   var hiddenLayers = Array(10)

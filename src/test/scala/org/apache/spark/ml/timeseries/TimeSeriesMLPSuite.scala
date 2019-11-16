@@ -8,7 +8,7 @@ class TimeSeriesMLPSuite extends MLTest {
   case class TSData(value: Double, timestamp: String)
 
   test("TimeSeriesMLP") {
-    val filePath = "src/test/resources/simple_ts.csv"
+    val filePath = "data/simple_ts.csv"
 
     val df = spark
       .read
@@ -45,7 +45,7 @@ class TimeSeriesMLPSuite extends MLTest {
   }
 
   test("TimeSeriesMLP with identity") {
-    val filePath = "src/test/resources/simple_ts.csv"
+    val filePath = "data/simple_ts.csv"
 
     val df = spark
       .read
@@ -82,7 +82,7 @@ class TimeSeriesMLPSuite extends MLTest {
   }
 
   test("predict dataframe") {
-    val filePath = "src/test/resources/simple_ts.csv"
+    val filePath = "data/simple_ts.csv"
 
     val df = spark
       .read

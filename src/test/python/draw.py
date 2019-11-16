@@ -1,9 +1,8 @@
 import csv
-import numpy as np
+
 import matplotlib.pyplot as plt
 
-
-path = "/home/luoyl/基于MLP的时间序列算法/TimeSeriesMLP/src/test/resources/identity.csv"
+path = "../../../data/identity.csv"
 
 csv_fp = csv.reader(open(path))
 
@@ -34,6 +33,6 @@ plt.plot(X, Y2, label='prediction', lw=1)
 
 plt.legend()
 
-plt.savefig('/home/luoyl/基于MLP的时间序列算法/TimeSeriesMLP/img/identity.png')
+plt.savefig('../../../img/identity.png')
 
 plt.show()

@@ -1,7 +1,7 @@
 package org.apache.spark.ml.regression
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.ml.ann.{FeedForwardTrainer, HCFeedForwardTopology}
+import org.apache.spark.ml.ann.{FeedForwardTrainer, RegressionFeedForwardTopology}
 import org.apache.spark.ml.linalg.{Vector, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
@@ -27,7 +27,8 @@ private[regression] trait MultilayerPerceptronRegressorParams extends Params
 
   final val layers: IntArrayParam = new IntArrayParam(this, "layers",
     "Size of layers",
-    (t: Array[Int]) => t.forall(ParamValidators.gt(0)) && t.length > 1)
+    (t: Array[Int]) => t.forall(ParamValidators.gt(0)) && t.length > 1
+      && t.last == 1)
 
   def getLayers: Array[Int] = $(layers)
 
@@ -98,7 +99,7 @@ class MultilayerPerceptronRegressor(override val uid: String)
 
     val data = transformDataset(dataset)
 
-    val topology = HCFeedForwardTopology.multiLayerRegressionPerceptron(getLayers, $(activation))
+    val topology = RegressionFeedForwardTopology.multiLayerRegressionPerceptron(getLayers, $(activation))
 
     val trainer = new FeedForwardTrainer(topology, getLayers.head, getLayers.last)
     if (isDefined(initialWeights)) {
@@ -136,7 +137,7 @@ private[regression] class MultilayerPerceptronRegressorModel(
     val activationType: String) extends RegressionModel[Vector, MultilayerPerceptronRegressorModel]
   with MultilayerPerceptronRegressorParams {
 
-  private[ml] val mlpModel = HCFeedForwardTopology
+  private[ml] val mlpModel = RegressionFeedForwardTopology
     .multiLayerRegressionPerceptron(layerSizes, activationType)
     .model(weights)
 

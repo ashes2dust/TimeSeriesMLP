@@ -3,7 +3,7 @@ package org.apache.spark.ml.timeseries
 import java.text.SimpleDateFormat
 import java.util.{Calendar, Date}
 
-import org.apache.spark.ml.ann.HCFeedForwardTopology
+import org.apache.spark.ml.ann.RegressionFeedForwardTopology
 import org.apache.spark.ml.linalg.{DenseVector, Vector, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
@@ -218,7 +218,7 @@ class TimeSeriesMLPModel(
                           val weights: Vector,
                           val activationType: String) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
 
-  private[ml] val mlpModel = HCFeedForwardTopology
+  private[ml] val mlpModel = RegressionFeedForwardTopology
     .multiLayerRegressionPerceptron(layers, activationType)
     .model(weights)
 

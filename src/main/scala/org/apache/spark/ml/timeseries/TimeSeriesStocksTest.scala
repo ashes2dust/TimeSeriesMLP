@@ -4,8 +4,8 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.ml.linalg.Vector
 
 object TimeSeriesStocksTest {
-  var input = "src/test/resources/sp500_train.csv"
-  var testInput = "src/test/resources/sp500_test.csv"
+  var input = "data/sp500_train.csv"
+  var testInput = "data/sp500_test.csv"
   var windowSize = 50
   var pattern = "dd-MM-yy"
   var hiddenLayers = Array(100, 100)
