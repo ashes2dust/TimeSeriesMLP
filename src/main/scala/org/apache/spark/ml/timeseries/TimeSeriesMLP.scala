@@ -11,8 +11,8 @@ import org.apache.spark.ml.regression.MultilayerPerceptronRegressor
 import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable}
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.types.{DoubleType, StructType}
-import org.apache.spark.sql.{DataFrame, Dataset, Row}
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.{Column, DataFrame, Dataset, Row}
 
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
@@ -46,7 +46,7 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
   def getBlockSize: Int = $(blockSize)
 
   final val windowSize: Param[Int] = new Param[Int](this, "windowSize",
-  "The window size", ParamValidators.gt(0))
+    "The window size", ParamValidators.gt(0))
 
   def getWindowSize: Int = $(windowSize)
 
@@ -57,8 +57,9 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
   def getHiddenLayers: Array[Int] = $(hiddenLayers)
 
   final val activation: Param[String] = new Param[String](this, "activation",
-    "The activation function of hidden layers",
-    ParamValidators.inArray(Array("relu", "sigmoid", "tanh", "identity")))
+    s"The activation function of hidden layers, " +
+      s"supported activations: ${supportedActivations.mkString(",")}",
+    ParamValidators.inArray(supportedActivations))
 
   def getActivation: String = $(activation)
 
@@ -67,10 +68,21 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
       s"${supportedSolvers.mkString(", ")}. (Default l-bfgs)",
     ParamValidators.inArray[String](supportedSolvers))
 
-  final val predictDays: IntParam = new IntParam(this, "predictDays",
-  "The number of days to forecast", ParamValidators.gt(0))
+  final val unit: Param[String] = new Param[String](this, "unit",
+    s"The unit of time series frequency, supported unit: ${supportedUnits.mkString(",")}",
+    ParamValidators.inArray(supportedUnits))
 
-  def getPredictDays: Int = $(predictDays)
+  def getUnit: String = $(unit)
+
+  final val frequency: IntParam = new IntParam(this, "frequency",
+    "The frequency of time series", ParamValidators.gt(0))
+
+  def getFrequency: Int = $(frequency)
+
+  final val futures: IntParam = new IntParam(this, "predictDays",
+    "The number of future units to forecast", ParamValidators.gt(0))
+
+  def getFutures: Int = $(futures)
 
   setDefault(
     maxIter -> 100,
@@ -82,8 +94,10 @@ private[timeseries] trait TimeSeriesMLPParams extends Params
     tsCol -> "timestamp",
     pattern -> "dd-MM-yy",
     windowSize -> 1,
-    activation -> "relu",
-    predictDays -> 1
+    activation -> "identity",
+    futures -> 1,
+    unit -> "day",
+    frequency -> 1
   )
 
 }
@@ -95,14 +109,30 @@ object TimeSeriesMLP extends DefaultParamsReadable[TimeSeriesMLP] {
 
   private[timeseries] val supportedSolvers = Array(LBFGS, GD)
 
+  private[timeseries] val supportedActivations = Array("relu", "sigmoid", "tanh", "identity")
+
+  private[timeseries] val supportedUnits = Array("year", "month", "day",
+    "hour", "minute", "second", "millisecond")
+
+  // NOTE: Calender does not support microsecond.
+  private[timeseries] val unitToField: Map[String, Int] = Map[String, Int](
+    "year" -> Calendar.YEAR,
+    "month" -> Calendar.MONTH,
+    "day" -> Calendar.DATE,
+    "hour" -> Calendar.HOUR,
+    "minute" -> Calendar.MINUTE,
+    "second" -> Calendar.SECOND,
+    "millisecond" -> Calendar.MILLISECOND
+  )
+
   override def load(path: String): TimeSeriesMLP = super.load(path)
 
   def slidingWindowTransform(data: RDD[(Double, Long)], windowSize: Int): RDD[(Vector, Double)] = {
     val windowData = data.flatMap { case (v, id) =>
       var i = id
       val arr = new ListBuffer[(Long, (Long, Double))]()
-      while (i >= id - windowSize) {
-        val tp = Tuple2(id, v)
+      val tp = Tuple2(id, v)
+      while (i >= id - windowSize && i >= 0) {
         arr += Tuple2(i, tp)
         i -= 1
       }
@@ -128,9 +158,9 @@ object TimeSeriesMLP extends DefaultParamsReadable[TimeSeriesMLP] {
       labelCol: String = "label"): DataFrame = {
 
     val data = dataset.select(valueCol, tsCol)
-      .rdd.map { case Row(value: String, ts: String) =>
+      .rdd.map { case Row(value: Double, ts: String) =>
       val format = new SimpleDateFormat(pattern)
-      (value.toDouble, format.parse(ts).getTime)
+      (value, format.parse(ts).getTime)
     }
 
     val sortedData = {
@@ -168,6 +198,10 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 
   def setActivation(value: String): this.type = set(activation, value)
 
+  def setUnit(value: String): this.type = set(unit, value)
+
+  def setFrequency(value: Int): this.type = set(frequency, value)
+
   def setSeed(value: Long): this.type = set(seed, value)
 
   def setMaxIter(value: Int): this.type = set(maxIter, value)
@@ -183,13 +217,12 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
   override def copy(extra: ParamMap): TimeSeriesMLP = defaultCopy(extra)
 
   override def transformSchema(schema: StructType): StructType = {
-    // TODO
     schema
   }
 
   override def fit(dataset: Dataset[_]): TimeSeriesMLPModel = {
 
-    val df = TimeSeriesMLP.slidingWindowTransform(dataset, $(windowSize), sort=true,
+    val df = TimeSeriesMLP.slidingWindowTransform(dataset, $(windowSize), sort = true,
       $(valueCol), $(tsCol), $(pattern))
 
     val layers = Array($(windowSize)) ++ $(hiddenLayers) ++ Array(1)
@@ -213,10 +246,12 @@ class TimeSeriesMLP(override val uid: String) extends Estimator[TimeSeriesMLPMod
 }
 
 class TimeSeriesMLPModel(
-                          override val uid: String,
-                          val layers: Array[Int],
-                          val weights: Vector,
-                          val activationType: String) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
+      override val uid: String,
+      val layers: Array[Int],
+      val weights: Vector,
+      val activationType: String) extends Model[TimeSeriesMLPModel] with TimeSeriesMLPParams {
+
+  import TimeSeriesMLP._
 
   private[ml] val mlpModel = RegressionFeedForwardTopology
     .multiLayerRegressionPerceptron(layers, activationType)
@@ -228,43 +263,26 @@ class TimeSeriesMLPModel(
 
   def setPattern(value: String): this.type = set(pattern, value)
 
-  def setPredictDays(value: Int): this.type = set(predictDays, value)
+  def setFutures(value: Int): this.type = set(futures, value)
 
   override def copy(extra: ParamMap): TimeSeriesMLPModel = {
     val copied = new TimeSeriesMLPModel(uid, layers, weights, activationType)
     copied.copyValues(copied, extra)
   }
 
+  // Forecast the future days
   override def transform(dataset: Dataset[_]): DataFrame = {
-    // TODO
-    dataset.toDF()
-  }
-
-  override def transformSchema(schema: StructType): StructType = {
-    // TODO
-    schema
-  }
-
-  def predict(features: Vector): Double = {
-    val v = mlpModel.predict(features)
-    v(0)
-  }
-
-  case class TSData(value: Double, timestamp: String)
-
-  // Forecast the future days according to predictDays
-  def predict(dataset: Dataset[_]): DataFrame = {
     val format = new SimpleDateFormat($(pattern))
 
     val toTime = dataset.sparkSession.udf.register("toTime", (ts: String) => format.parse(ts).getTime)
 
-    val rawDF = dataset.toDF($(valueCol), $(tsCol))
-    val df = rawDF.withColumn($(tsCol), toTime(rawDF($(tsCol))))
-      .withColumn($(valueCol), rawDF($(valueCol)).cast(DoubleType)).sort($(tsCol)).cache()
+    val df = dataset.toDF($(valueCol), $(tsCol))
+      .withColumn($(tsCol), toTime(new Column($(tsCol))))
 
     val histories = df.rdd.map { case Row(value: Double, ts: Long) =>
       (value, ts)
-    }.collect()
+    }.sortBy(-_._2)
+      .take($(windowSize)).reverse
 
     if (histories.length < $(windowSize)) {
       throw new IllegalArgumentException(
@@ -276,7 +294,7 @@ class TimeSeriesMLPModel(
     var feature = histories.map(_._1).drop(histories.length - $(windowSize))
     val predictions = ArrayBuffer[Double]()
 
-    for (i <- 0 until $(predictDays)) {
+    for (i <- 0 until $(futures)) {
       val pred = predict(new DenseVector(feature))
       predictions += pred
       feature = feature.drop(1) :+ pred
@@ -287,15 +305,26 @@ class TimeSeriesMLPModel(
     val cal = Calendar.getInstance()
 
     cal.setTime(startDate)
+    val field = unitToField($(unit))
 
-    val futures = ArrayBuffer[TSData]()
+    val futureData = ArrayBuffer[TSData]()
     for (pred <- predictions) {
-      cal.roll(Calendar.DATE, true)
-      futures += TSData(pred, format.format(cal.getTime))
+      cal.add(field, $(frequency))
+      futureData += TSData(pred, format.format(cal.getTime))
     }
 
-    df.unpersist()
-
-    dataset.sparkSession.createDataFrame(futures)
+    dataset.sparkSession.createDataFrame(futureData)
   }
+
+  override def transformSchema(schema: StructType): StructType = {
+    schema
+  }
+
+  def predict(features: Vector): Double = {
+    val v = mlpModel.predict(features)
+    v(0)
+  }
+
+  private[TimeSeriesMLPModel] case class TSData(value: Double, timestamp: String)
+
 }
